@@ -1,0 +1,76 @@
+name: Build clear kernel
+
+env:
+  CCACHE_DIR: /home/runner/.ccache
+  CCACHE_MAXSIZE: 10G
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y clang lld llvm git make gcc flex bison bc libssl-dev ccache libncurses5-dev libncursesw5-dev cmake python3 python-is-python3 cpio
+
+      - name: Restore CCache
+        uses: actions/cache/restore@v4
+        id: ccache-restore
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ github.ref_name }}-
+            ccache-${{ runner.os }}-
+
+      - name: Init CCache
+        run: |
+          # symlinks в /usr/lib/ccache подставляются впереди PATH,
+          # поэтому build.sh будет прозрачно дергать ccache для clang/gcc,
+          # даже если сам скрипт не задаёт CC="ccache clang"
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+
+          mkdir -p "${{ env.CCACHE_DIR }}"
+          ccache -M "${{ env.CCACHE_MAXSIZE }}"
+          ccache -o compression=true
+          ccache -o compiler_check=none
+
+          echo "CCache before build:"
+          ccache -s
+
+      - name: Build Project
+        run: | 
+          git config --global user.email "you@example.com"
+          git config --global user.name "lithneas-github"
+
+          chmod +x ./build.sh
+          ./build.sh all renoir
+
+          echo "CCache after build:"
+          ccache -s
+
+      - name: Save New CCache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: Compress
+        run: tar -czvf build.tar.gz ../out/anykernel/Mint*.zip
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: build.tar.gz
